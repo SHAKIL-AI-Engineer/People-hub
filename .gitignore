@@ -1,0 +1,77 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build output
+/peoplehub
+/peoplehub-gateway
+/server
+/uploads
+
+# Test binary
+*.test
+
+# Go coverage
+*.out
+*.prof
+
+# Dependencies
+web/node_modules/
+
+# Build directories
+web/dist/
+web/build/
+web/.next/
+
+# Environment and config - NEVER commit real secrets
+.env
+.env.local
+.env.production
+.env.*.local
+.env.*.production
+
+# Database and backups - PII, never commit
+backups/
+tmp/
+bin/
+*.db
+peoplehub.db
+*.sql
+!migrations/*.sql
+
+# Build artifacts
+peoplehub.exe
+peoplehub-gateway.exe
+server.exe
+/wwwroot/
+
+# Deploy secrets - use templates
+deploy/*service*.xml
+!deploy/*.xml.template
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Swagger generated docs (optional - uncomment if you want to regenerate)
+# docs/
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+
+

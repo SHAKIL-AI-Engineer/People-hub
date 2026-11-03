@@ -1,0 +1,233 @@
+package repository
+
+import (
+	"time"
+
+	"github.com/shakil5281/peoplehub-api/internal/models"
+	"gorm.io/gorm"
+)
+
+type SalaryIncrementRepository struct {
+	db *gorm.DB
+}
+
+func NewSalaryIncrementRepository(db *gorm.DB) *SalaryIncrementRepository {
+	return &SalaryIncrementRepository{db: db}
+}
+
+type IncrementFilter struct {
+	CompanyID     string
+	EmployeeID    string
+	DepartmentID  string
+	SectionID     string
+	DesignationID string
+	LineID        string
+	GroupID       string
+	Month         int
+	Year          int
+	Status        string
+	IncrementType string
+}
+
+func (r *SalaryIncrementRepository) List(f IncrementFilter) ([]models.SalaryIncrement, error) {
+	query := r.db.Preload("Employee.Department").
+		Preload("Employee.SectionRef").
+		Preload("Employee.DesignationRef").
+		Preload("NewDesignation").
+		Preload("PreviousDesignation").
+		Where("salary_increments.company_id = ? AND salary_increments.deleted_at IS NULL", f.CompanyID)
+
+	if f.Status != "" {
+		query = query.Where("salary_increments.status = ?", f.Status)
+	}
+	if f.IncrementType != "" {
+		query = query.Where("salary_increments.increment_type = ?", f.IncrementType)
+	}
+	if f.EmployeeID != "" {
+		// Partial match support for search input (e.g. "224" matches "2244")
+		query = query.Where("salary_increments.employee_id ILIKE ?", "%"+f.EmployeeID+"%")
+	}
+
+	if f.DepartmentID != "" {
+		query = query.Where("salary_increments.employee_id IN (SELECT employee_id FROM employees WHERE department_id = ?)", f.DepartmentID)
+	}
+	if f.SectionID != "" {
+		query = query.Where("salary_increments.employee_id IN (SELECT employee_id FROM employees WHERE section_id = ?)", f.SectionID)
+	}
+	if f.DesignationID != "" {
+		query = query.Where("salary_increments.employee_id IN (SELECT employee_id FROM employees WHERE designation_id = ?)", f.DesignationID)
+	}
+	if f.LineID != "" {
+		query = query.Where("salary_increments.employee_id IN (SELECT employee_id FROM employees WHERE line_id = ?)", f.LineID)
+	}
+	if f.GroupID != "" {
+		query = query.Where("salary_increments.employee_id IN (SELECT employee_id FROM employees WHERE group_id = ?)", f.GroupID)
+	}
+	if f.Month > 0 && f.Year > 0 {
+		start := time.Date(f.Year, time.Month(f.Month), 1, 0, 0, 0, 0, time.UTC)
+		end := start.AddDate(0, 1, 0)
+		query = query.Where("salary_increments.effective_date >= ? AND salary_increments.effective_date < ?", start.Format("2006-01-02"), end.Format("2006-01-02"))
+	} else if f.Year > 0 {
+		start := time.Date(f.Year, 1, 1, 0, 0, 0, 0, time.UTC)
+		end := start.AddDate(1, 0, 0)
+		query = query.Where("salary_increments.effective_date >= ? AND salary_increments.effective_date < ?", start.Format("2006-01-02"), end.Format("2006-01-02"))
+	} else if f.Month > 0 {
+		query = query.Where("EXTRACT(MONTH FROM salary_increments.effective_date::date) = ?", f.Month)
+	}
+
+	var incs []models.SalaryIncrement
+	err := query.Order("salary_increments.effective_date DESC, salary_increments.created_at DESC").Find(&incs).Error
+	return incs, err
+}
+
+func (r *SalaryIncrementRepository) Create(inc *models.SalaryIncrement) error {
+	return r.db.Create(inc).Error
+}
+
+func (r *SalaryIncrementRepository) CreateBatch(incs []models.SalaryIncrement) error {
+	if len(incs) == 0 {
+		return nil
+	}
+	return r.db.CreateInBatches(incs, 100).Error
+}
+
+func (r *SalaryIncrementRepository) FindByID(id string) (*models.SalaryIncrement, error) {
+	var inc models.SalaryIncrement
+	err := r.db.Preload("Employee.Department").
+		Preload("Employee.DesignationRef").
+		Preload("NewDesignation").
+		Preload("PreviousDesignation").
+		Where("id = ? AND deleted_at IS NULL", id).
+		First(&inc).Error
+	return &inc, err
+}
+
+func (r *SalaryIncrementRepository) Update(inc *models.SalaryIncrement) error {
+	return r.db.Save(inc).Error
+}
+
+func (r *SalaryIncrementRepository) FindEligibleEmployees(companyID, departmentID, sectionID, designationID, lineID, groupID string) ([]models.Employee, error) {
+	query := r.db.Model(&models.Employee{}).
+		Where("company_id = ? AND status = 'active' AND employee_type = 'regular' AND gross_salary > 0", companyID)
+	if departmentID != "" {
+		query = query.Where("department_id = ?", departmentID)
+	}
+	if sectionID != "" {
+		query = query.Where("section_id = ?", sectionID)
+	}
+	if designationID != "" {
+		query = query.Where("designation_id = ?", designationID)
+	}
+	if lineID != "" {
+		query = query.Where("line_id = ?", lineID)
+	}
+	if groupID != "" {
+		query = query.Where("group_id = ?", groupID)
+	}
+	var emps []models.Employee
+	err := query.Order("employee_id ASC").Find(&emps).Error
+	return emps, err
+}
+
+func (r *SalaryIncrementRepository) FindEligibleEmployeesByIDs(companyID string, employeeIDs []string) ([]models.Employee, error) {
+	if len(employeeIDs) == 0 {
+		return nil, nil
+	}
+	var emps []models.Employee
+	err := r.db.Model(&models.Employee{}).
+		Where("company_id = ? AND employee_id IN ?", companyID, employeeIDs).
+		Order("employee_id ASC").Find(&emps).Error
+	return emps, err
+}
+
+func (r *SalaryIncrementRepository) Delete(id string) error {
+	return r.db.Where("id = ?", id).Delete(&models.SalaryIncrement{}).Error
+}
+
+func (r *SalaryIncrementRepository) ListByEmployee(employeeID string, year, month int) ([]models.SalaryIncrement, error) {
+	query := r.db.Preload("Employee.Department").
+		Preload("Employee.DesignationRef").
+		Preload("NewDesignation").
+		Preload("PreviousDesignation").
+		Where("salary_increments.employee_id = ? AND salary_increments.deleted_at IS NULL", employeeID)
+
+	if year > 0 && month > 0 {
+		start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+		end := start.AddDate(0, 1, 0)
+		query = query.Where("salary_increments.effective_date >= ? AND salary_increments.effective_date < ?", start.Format("2006-01-02"), end.Format("2006-01-02"))
+	} else if year > 0 {
+		start := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+		end := start.AddDate(1, 0, 0)
+		query = query.Where("salary_increments.effective_date >= ? AND salary_increments.effective_date < ?", start.Format("2006-01-02"), end.Format("2006-01-02"))
+	} else if month > 0 {
+		query = query.Where("EXTRACT(MONTH FROM salary_increments.effective_date::date) = ?", month)
+	}
+
+	var incs []models.SalaryIncrement
+	err := query.Order("salary_increments.effective_date DESC, salary_increments.created_at DESC").Find(&incs).Error
+	return incs, err
+}
+
+// GetEffectiveSalary returns the latest approved increment at or before asOfDate (YYYY-MM-DD) for one employee.
+// Used by salary ProcessMonth to resolve temporal gross: effective month → next increment.
+func (r *SalaryIncrementRepository) GetEffectiveSalary(employeeID, companyID, asOfDate string) (*models.SalaryIncrement, error) {
+	var inc models.SalaryIncrement
+	err := r.db.Where("employee_id = ? AND company_id = ? AND status = 'approved' AND effective_date <= ? AND deleted_at IS NULL", employeeID, companyID, asOfDate).
+		Order("effective_date DESC, created_at DESC").
+		First(&inc).Error
+	if err != nil {
+		return nil, err
+	}
+	return &inc, nil
+}
+
+// BatchEffectiveSalaries returns map[employeeID]→latest approved increment ≤ asOfDate for a company.
+// Uses DISTINCT ON to fetch one row per employee efficiently.
+func (r *SalaryIncrementRepository) BatchEffectiveSalaries(companyID string, employeeIDs []string, asOfDate string) (map[string]*models.SalaryIncrement, error) {
+	if len(employeeIDs) == 0 {
+		return map[string]*models.SalaryIncrement{}, nil
+	}
+	// Single query with DISTINCT ON (PostgreSQL) — one row per employee, latest effective_date
+	var rows []models.SalaryIncrement
+	err := r.db.Where("company_id = ? AND employee_id IN ? AND status = 'approved' AND effective_date <= ? AND deleted_at IS NULL", companyID, employeeIDs, asOfDate).
+		Order("employee_id ASC, effective_date DESC, created_at DESC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	// Distinct ON logic in Go: keep first (latest) per employee_id since ordered DESC
+	m := make(map[string]*models.SalaryIncrement, len(employeeIDs))
+	for i := range rows {
+		empID := rows[i].EmployeeID
+		if _, exists := m[empID]; !exists {
+			cp := rows[i]
+			m[empID] = &cp
+		}
+	}
+	return m, nil
+}
+
+// BatchEarliestFutureIncrements returns map[employeeID]→earliest approved increment > asOfDate.
+// Used to derive old salary for months before first increment when live has already been mutated.
+func (r *SalaryIncrementRepository) BatchEarliestFutureIncrements(companyID string, employeeIDs []string, asOfDate string) (map[string]*models.SalaryIncrement, error) {
+	if len(employeeIDs) == 0 {
+		return map[string]*models.SalaryIncrement{}, nil
+	}
+	var rows []models.SalaryIncrement
+	err := r.db.Where("company_id = ? AND employee_id IN ? AND status = 'approved' AND effective_date > ? AND deleted_at IS NULL", companyID, employeeIDs, asOfDate).
+		Order("employee_id ASC, effective_date ASC, created_at ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]*models.SalaryIncrement, len(employeeIDs))
+	for i := range rows {
+		empID := rows[i].EmployeeID
+		if _, exists := m[empID]; !exists {
+			cp := rows[i]
+			m[empID] = &cp
+		}
+	}
+	return m, nil
+}
+
